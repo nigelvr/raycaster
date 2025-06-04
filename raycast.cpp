@@ -14,7 +14,7 @@ using namespace std;
 #define WHITE 0xFFFFFFFF
 #define GREY 0x00808080
 #define BLUE 0x000047AB
-#define CYAN 0x0000FFFF
+#define CYAN 0xFF00FFFF
 #define GREEN 0x0000A36C
 
 const int box_width = 26;
@@ -27,13 +27,13 @@ SDL_Texture *map_tex;
 uint32_t *map_pixels;
 int pitch;
 
-double playerX=503;
-double playerY=433;
+double playerX=140;
+double playerY=20;
 double playerDirX=-1;
 double playerDirY=0;
 double rotSpeed=0.04;
 double walkSpeed = 1;
-double player_angle=0;
+double player_angle=0;//M_PI/2;
 int player_speed=4;
 SDL_Texture *player_tex;
 uint32_t *player_pixels;
@@ -166,6 +166,8 @@ bool pollAndHandleEvent() {
     if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
         return true;
     }
+    double rayDirX = sin(player_angle);
+    double rayDirY = cos(player_angle);
     if (event.type == SDL_KEYDOWN) {
         switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
@@ -178,8 +180,10 @@ bool pollAndHandleEvent() {
                 }
                 break;
             case SDLK_DOWN:
-                x = floor(playerX - sin(player_angle)*player_speed);
-                y = floor(playerY + cos(player_angle)*player_speed);
+                // x = floor(playerX - sin(player_angle)*player_speed);
+                // y = floor(playerY + cos(player_angle)*player_speed);
+                x = floor(playerX - rayDirX*player_speed);
+                y = floor(playerY - rayDirY*player_speed);
 
                 if (x < 0 || x > SCREEN_WIDTH || y < 0 || y > SCREEN_HEIGHT
                     || world_map[x/box_width][y/box_height]) {
@@ -190,8 +194,8 @@ bool pollAndHandleEvent() {
                 playerY = y;
                 break;
             case SDLK_UP:
-                x = floor(playerX + sin(player_angle)*player_speed);
-                y = floor(playerY - cos(player_angle)*player_speed);
+                x = floor(playerX + rayDirX*player_speed);
+                y = floor(playerY + rayDirY*player_speed);
 
                 if (x < 0 || x > SCREEN_WIDTH || y < 0 || y > SCREEN_HEIGHT
                     || world_map[x/box_width][y/box_height]) {
@@ -202,10 +206,10 @@ bool pollAndHandleEvent() {
                 playerY = y;
                 break;
             case SDLK_LEFT:
-                player_angle = fmod(player_angle-0.01*player_speed, 2*M_PI);
+                player_angle = fmod(player_angle+0.01*player_speed, 2*M_PI);
                 break;
             case SDLK_RIGHT:
-                player_angle = fmod(player_angle+0.01*player_speed, 2*M_PI);
+                player_angle = fmod(player_angle-0.01*player_speed, 2*M_PI);
                 break;
         }
     }
@@ -216,7 +220,11 @@ void draw_player() {
     SDL_LockTexture(player_tex, NULL, (void **)&player_pixels, &pitch);
     memset(player_pixels, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(uint32_t));
     fill_rect(playerX, playerY, 10, 10, RED, player_pixels);
-    draw_line(playerX, playerY, floor(playerX + 30*sin(player_angle)), floor(playerY - 30*cos(player_angle)), player_pixels, RED);
+    // draw_line(playerX, playerY, floor(playerX + 30*sin(player_angle)), floor(playerY - 30*cos(player_angle)), player_pixels, RED);
+    double rayDirX = sin(player_angle);
+    double rayDirY = cos(player_angle);
+
+    draw_line(playerX, playerY, floor(playerX + 30*rayDirX), floor(playerY + 30*rayDirY), player_pixels, RED);
     SDL_UnlockTexture(player_tex);
 }
 
@@ -233,12 +241,14 @@ void draw_fov() {
         double dirY = cos(player_angle);
         double planeX = -cos(player_angle);
         double planeY = sin(player_angle);
-        
+
         double rayDirX = dirX + planeX * cameraX;
         double rayDirY = dirY + planeY * cameraX;
 
         int mapX = int(px);
         int mapY = int(py);
+
+        printf("At %d %d - ", mapX, mapY);
 
         double deltaDistX = (rayDirX == 0) ? 1e30 : abs(1/rayDirX);
         double deltaDistY = (rayDirY == 0) ? 1e30 : abs(1/rayDirY);
@@ -278,6 +288,8 @@ void draw_fov() {
                 break;
             }
         }
+
+        printf("hit %d %d\n", mapX, mapY);
 
         if (!side) {
             perpWallDist = sideDistX - deltaDistX;
