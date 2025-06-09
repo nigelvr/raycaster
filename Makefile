@@ -2,7 +2,7 @@
 all: raycast
 
 raycast: raycast.cpp
-	g++ raycast.cpp -o raycast -lSDL2
+	g++ -g raycast.cpp -o raycast -lSDL2
 
 .PHONY: clean
 clean:
