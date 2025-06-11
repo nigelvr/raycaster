@@ -10,7 +10,7 @@ using namespace std;
 #define RED 0xFF0000FF
 #define WHITE 0xFFFFFFFF
 #define GREY 0x00808080
-#define BLUE 0x000047AB
+#define BLUE 0xFF0000FF
 #define CYAN 0xFF00FFFF
 #define GREEN 0x0000A36C
 
@@ -19,9 +19,8 @@ using namespace std;
 #define SCREEN_HEIGHT 480
 #define MAP_WIDTH 24
 #define MAP_HEIGHT 24
-const int box_width = 26;
-const int box_height = 20;
-const int wall_height = 200;
+#define BOX_WIDTH 26
+#define BOX_HEIGHT 20
 
 // Game globals
 SDL_Texture *map_tex;
@@ -29,10 +28,6 @@ uint32_t *map_pixels;
 int pitch;
 
 // More game globals
-double playerX=140;
-double playerY=20;
-double playerDirX=-1;
-double playerDirY=0;
 double rotSpeed=0.04;
 double walkSpeed = 1;
 double player_angle=0;
@@ -44,6 +39,7 @@ uint32_t *player_pixels;
 SDL_Texture *fov_tex;
 uint32_t *fov_pixels;
 vector<pair<pair<int,int>, double>> fov;
+
 
 enum Mode {
     MAP,
@@ -76,35 +72,83 @@ const int world_map[MAP_WIDTH][MAP_HEIGHT] = {
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+  {1,1,2,2,3,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
-template <class T>
+double myMin(double x, double y) {
+    return x >= y ? y : x;
+}
+
+double myMax(double x, double y) {
+    return x >= y ? x : y;
+}
+
 class vec2 {
 public:
-    T x,y;
-    vec2(T x0, T y0) {
+    double x,y;
+    vec2(double x0, double y0) {
         x = x0;
         y = y0;
     }
+
+    vec2() {}
 
     int dist_squared(vec2 u) {
         return (x-u.x)*(x-u.x) + (y-u.y)*(y-u.y);
     }
 
-    vec2 roundDown() {
+    vec2 round() {
         return vec2(floor(x), floor(y));
     }
 
+    vec2 max(vec2 u) {
+        return vec2(myMax(x, u.x), myMax(y, u.y));
+    }
+
+    vec2 min(vec2 u) {
+        return vec2(myMin(x, u.x), myMin(y, u.y));
+    }
 };
 
-vec2<double> playerPos(140,20);
-
-void draw_pixel(vec2<int> v, uint32_t *pixbuf, uint32_t color) {
-    pixbuf[v.y*(pitch/sizeof(uint32_t))+v.x] = color;
+vec2 operator+(vec2 a, vec2 b) {
+    return vec2(a.x+b.x, a.y+b.y);
 }
 
-void fill_rect(vec2<int> v, int width, int height, uint32_t color, uint32_t *target, int pad=1) {
+vec2 operator-(vec2 a, vec2 b) {
+    return vec2(a.x-b.x, a.y-b.y);
+}
+
+vec2 operator*(double scalar, vec2 a) {
+    return vec2(scalar*a.x, scalar*a.y);
+}
+
+vec2 operator/(vec2 a, double scalar) {
+    return vec2(a.x/scalar, a.y/scalar);
+}
+
+bool operator==(vec2 a, vec2 b) {
+    return a.x == b.x && a.y == b.y;
+}
+
+bool operator!=(vec2 a, vec2 b) {
+    return !(a==b);
+}
+
+vec2 playerPos(140,20);
+
+void draw_pixel(vec2 v, uint32_t *pixbuf, uint32_t color) {
+    int x = floor(v.x);
+    int y = floor(v.y);
+    pixbuf[y*(pitch/sizeof(uint32_t))+x] = color;
+}
+
+void draw_pixel_with_pitch(vec2 v, uint32_t *pixbuf, uint32_t color, int p) {
+    int x = floor(v.x);
+    int y = floor(v.y);
+    pixbuf[y*(p/sizeof(uint32_t))+x] = color;
+}
+
+void fill_rect(vec2 v, int width, int height, uint32_t color, uint32_t *target, int pad=1) {
     for (int i = v.x+pad; i < v.x+width-1; i++) {
         for (int j = v.y+pad; j < v.y+height-1; j++) {
             draw_pixel(vec2(i,j), target, color);
@@ -112,16 +156,18 @@ void fill_rect(vec2<int> v, int width, int height, uint32_t color, uint32_t *tar
     }
 }
 
-int cell_value(vec2<int> v) {
-    return world_map[v.x/box_width][v.y/box_height];
+int cell_value(vec2 v) {
+    int x = floor(v.x);
+    int y = floor(v.y);
+    return world_map[x/BOX_WIDTH][y/BOX_HEIGHT];
 }
 
-uint32_t color_map(int k) {
+uint32_t colorMap(int k) {
     switch (k) {
         case 1:
-            return GREY;
+            return GREY; // ok
         case 2:
-            return RED;
+            return RED; // OK
         case 3:
             return BLUE;
         case 4:
@@ -130,7 +176,7 @@ uint32_t color_map(int k) {
     return GREEN;
 }
 
-void draw_line(vec2<int> u, vec2<int> v, uint32_t *pixbuf, uint32_t color=RED) {
+void draw_line(vec2 u, vec2 v, uint32_t *pixbuf, uint32_t color=RED, int p=pitch) {
     int length_squared = (v.x-u.x)*(v.x-u.x) + (v.y-u.y)*(v.y-u.y);
     int dx = abs(v.x-u.x);
     int dy = abs(v.y-u.y);
@@ -147,7 +193,7 @@ void draw_line(vec2<int> u, vec2<int> v, uint32_t *pixbuf, uint32_t color=RED) {
             break;
         }
         
-        draw_pixel(u, pixbuf, color);
+        draw_pixel_with_pitch(u, pixbuf, color, p);
         
         if (err > -dx) {
             err -= dy;
@@ -165,14 +211,14 @@ void draw_2d_map() {
 
     for (int i = 0; i < MAP_WIDTH; i++) {
         for (int y=0; y < SCREEN_HEIGHT; y++) {
-            draw_pixel(vec2(i*box_width, y), map_pixels, WHITE);
+            draw_pixel(vec2(i*BOX_WIDTH, y), map_pixels, WHITE);
         }
         for (int j = 0; j < MAP_HEIGHT; j++) {
             for (int x=0; x < SCREEN_WIDTH; x++) {
-                draw_pixel(vec2(x, j*box_height), map_pixels, WHITE);
+                draw_pixel(vec2(x, j*BOX_HEIGHT), map_pixels, WHITE);
             }
             if (world_map[i][j]) {
-                fill_rect(vec2(i*box_width, j*box_height), box_width, box_height, color_map(world_map[i][j]), map_pixels);
+                fill_rect(vec2(i*BOX_WIDTH, j*BOX_HEIGHT), BOX_WIDTH, BOX_HEIGHT, colorMap(world_map[i][j]), map_pixels);
             }
         }
     }
@@ -180,16 +226,8 @@ void draw_2d_map() {
     SDL_UnlockTexture(map_tex);
 }
 
-vec2<double> computeRayDir() {
-    return vec2<double>(sin(player_angle), cos(player_angle));
-}
-
-double min(double x, double y) {
-    return x >= y ? y : x;
-}
-
-double max(double x, double y) {
-    return x >= y ? x : y;
+vec2 computeRayDir() {
+    return vec2(sin(player_angle), cos(player_angle));
 }
 
 // returns true if time to quit
@@ -200,8 +238,8 @@ bool pollAndHandleEvent() {
     if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
         return true;
     }
-    double rayDirX = sin(player_angle);
-    double rayDirY = cos(player_angle);
+    vec2 rayDir = computeRayDir();
+    vec2 tmpVec(-1,-1);
     if (event.type == SDL_KEYDOWN) {
         switch (event.key.keysym.sym) {
             case SDLK_ESCAPE:
@@ -214,26 +252,12 @@ bool pollAndHandleEvent() {
                 }
                 break;
             case SDLK_DOWN:
-                x = max(0, floor(playerPos.x - rayDirX*player_speed));
-                y = max(floor(playerPos.y - rayDirY*player_speed), 0);
-
-                if (world_map[x/box_width][y/box_height]) {
-                    goto done;
-                }
-
-                playerPos.x = x;
-                playerPos.y = y;
+                tmpVec = vec2(0,0).max(playerPos - player_speed*rayDir);
+                playerPos = tmpVec;
                 break;
             case SDLK_UP:
-                x = min(SCREEN_WIDTH, floor(playerPos.x + rayDirX*player_speed));
-                y = min(SCREEN_HEIGHT, floor(playerPos.y + rayDirY*player_speed));
-
-                if (world_map[x/box_width][y/box_height]) {
-                    goto done;
-                }
-
-                playerPos.x = x;
-                playerPos.y = y;
+                tmpVec = vec2(SCREEN_WIDTH,SCREEN_HEIGHT).min(playerPos + player_speed*rayDir);
+                playerPos = tmpVec;
                 break;
             case SDLK_LEFT:
                 player_angle = fmod(player_angle+0.01*player_speed, 2*M_PI);
@@ -243,91 +267,98 @@ bool pollAndHandleEvent() {
                 break;
         }
     }
+
+    if (tmpVec != playerPos) {
+        if (world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
+            goto done;
+        } else {
+            playerPos = tmpVec;
+        }
+    }
 done:
     return false;
 }
 
 void draw_player() {
-    SDL_LockTexture(player_tex, NULL, (void **)&player_pixels, &pitch);
-    memset(player_pixels, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(uint32_t));
-
-    fill_rect(vec2<int>(floor(playerPos.x), floor(playerPos.y)), 10, 10, RED, player_pixels);
-    
-    double rayDirX = sin(player_angle);
-    double rayDirY = cos(player_angle);
-
-    draw_line(vec2<int>(floor(playerPos.x), floor(playerPos.y)), vec2<int>(floor(playerPos.x + 30*rayDirX), floor(playerPos.y + 30*rayDirY)), player_pixels, RED);
+    int player_pitch;
+    SDL_LockTexture(player_tex, NULL, (void **)&player_pixels, &player_pitch);
+    memset(player_pixels, 0, 40*40*sizeof(uint32_t));
+    for (int i = 20; i < 30; i++) {
+        for (int j = 20; j < 30; j++) {
+            draw_pixel_with_pitch(vec2(i,j), player_pixels, RED, player_pitch);
+        }
+    }
+    vec2 rayDir = computeRayDir();
+    draw_line(vec2(20,20), (vec2(20,20) + 20*rayDir).round(), player_pixels, RED, player_pitch);
     SDL_UnlockTexture(player_tex);
+}
+
+// Sends a ray from playerPos to cameraX*planeDir and returns the distance
+// from the hit wall
+void dda(double cameraX, double *perpWallDist, int *rMapX, int *rMapY) {
+    double sideDistX, sideDistY;
+    double px = playerPos.x/(double)BOX_WIDTH;
+    double py = playerPos.y/(double)BOX_HEIGHT;
+    vec2 rayDir = vec2(sin(player_angle), cos(player_angle)) + cameraX*vec2(-cos(player_angle), sin(player_angle));
+    int mapX = int(px);
+    int mapY = int(py);
+    double deltaDistX = (rayDir.x == 0) ? 1e30 : abs(1/rayDir.x);
+    double deltaDistY = (rayDir.y == 0) ? 1e30 : abs(1/rayDir.y);
+    int hit, stepX, stepY, side;
+
+    hit = 0;
+    if (rayDir.x < 0) {
+        stepX = -1;
+        sideDistX = (px - mapX)*deltaDistX;
+    } else {
+        stepX = 1;
+        sideDistX = (mapX + 1 - px) * deltaDistX;
+    }
+
+    if (rayDir.y < 0) {
+        stepY = -1;
+        sideDistY = (py - mapY) * deltaDistY;
+    } else {
+        stepY = 1;
+        sideDistY = (mapY + 1 - py) * deltaDistY;
+    }
+
+    while (!hit) {
+        if (sideDistX < sideDistY) {
+            sideDistX += deltaDistX;
+            mapX += stepX;
+            side = 0;
+        } else {
+            sideDistY += deltaDistY;
+            mapY += stepY;
+            side = 1;
+        }
+
+        if (world_map[mapX][mapY]) {
+            hit=1;
+            break;
+        }
+    }
+
+    if (!side) {
+        *perpWallDist = sideDistX - deltaDistX; 
+    } else {
+        *perpWallDist = sideDistY - deltaDistY;
+    }
+    *rMapX = mapX;
+    *rMapY = mapY;
+    
 }
 
 void draw_fov() {
     SDL_LockTexture(fov_tex, NULL, (void **)&fov_pixels, &pitch);
     memset(fov_pixels, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(uint32_t));
-    int hit, stepX, stepY, side;
-    double sideDistX, sideDistY;
-    double px = playerPos.x/(double)box_width;
-    double py = playerPos.y/(double)box_height;
+    int mapX, mapY;
+    double cameraX, perpWallDist;
     for (int x = 0; x < SCREEN_WIDTH; x++) {
-        double cameraX = 2*(x/(double)SCREEN_WIDTH) - 1;
-        double dirX = sin(player_angle);
-        double dirY = cos(player_angle);
-        double planeX = -cos(player_angle);
-        double planeY = sin(player_angle);
+        cameraX = 2*(x/(double)SCREEN_WIDTH) - 1;
 
-        double rayDirX = dirX + planeX * cameraX;
-        double rayDirY = dirY + planeY * cameraX;
-
-        int mapX = int(px);
-        int mapY = int(py);
-
-        printf("At %d %d - ", mapX, mapY);
-
-        double deltaDistX = (rayDirX == 0) ? 1e30 : abs(1/rayDirX);
-        double deltaDistY = (rayDirY == 0) ? 1e30 : abs(1/rayDirY);
-        double perpWallDist;
-
-        hit = 0;
-
-        if (rayDirX < 0) {
-            stepX = -1;
-            sideDistX = (px - mapX)*deltaDistX;
-        } else {
-            stepX = 1;
-            sideDistX = (mapX + 1 - px) * deltaDistX;
-        }
-
-        if (rayDirY < 0) {
-            stepY = -1;
-            sideDistY = (py - mapY) * deltaDistY;
-        } else {
-            stepY = 1;
-            sideDistY = (mapY + 1 - py) * deltaDistY;
-        }
-
-        while (!hit) {
-            if (sideDistX < sideDistY) {
-                sideDistX += deltaDistX;
-                mapX += stepX;
-                side = 0;
-            } else {
-                sideDistY += deltaDistY;
-                mapY += stepY;
-                side = 1;
-            }
-
-            if (world_map[mapX][mapY]) {
-                hit=1;
-                break;
-            }
-        }
-
-        printf("hit %d %d\n", mapX, mapY);
-
-        if (!side) {
-            perpWallDist = sideDistX - deltaDistX;
-        } else {
-            perpWallDist = sideDistY - deltaDistY;
-        }
+        dda(cameraX, &perpWallDist, &mapX, &mapY);
 
         int lineHeight = (int)(SCREEN_HEIGHT/perpWallDist);
         // calculate lowest and highest pixel to fill in current stripe
@@ -342,7 +373,7 @@ void draw_fov() {
 
         // vertical line
         for (int y = drawStart; y <= drawEnd; y++) {
-            draw_pixel(vec2(x, y), fov_pixels, color_map(world_map[mapX][mapY]));
+            draw_pixel(vec2(x, y), fov_pixels, colorMap(world_map[mapX][mapY]));
         }
     }
     SDL_UnlockTexture(fov_tex);
@@ -353,7 +384,7 @@ int main(int argc, char **argv) {
     SDL_Window *window = SDL_CreateWindow("sdl app", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     map_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
-    player_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
+    player_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 40, 40);
     fov_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
     SDL_SetTextureBlendMode(map_tex, SDL_BLENDMODE_NONE);
     SDL_SetTextureBlendMode(player_tex, SDL_BLENDMODE_BLEND);
@@ -362,6 +393,9 @@ int main(int argc, char **argv) {
 
     SDL_Event event;
     bool quit = false;
+    SDL_Rect r;
+    r.w = 40;
+    r.h = 40;
     while (1) {
        quit = pollAndHandleEvent();
         if (quit) {
@@ -375,7 +409,9 @@ int main(int argc, char **argv) {
 
         if (mode == MAP) {
             SDL_RenderCopy(renderer, map_tex, NULL, NULL);
-            SDL_RenderCopy(renderer, player_tex, NULL, NULL);
+            r.x = floor(playerPos.x);
+            r.y = floor(playerPos.y);
+            SDL_RenderCopy(renderer, player_tex, NULL, &r);
         } else {
             SDL_RenderCopy(renderer, fov_tex, NULL, NULL);
         }
@@ -384,6 +420,12 @@ int main(int argc, char **argv) {
         SDL_Delay(16); // ~60FPS
     
     }
+
+    SDL_DestroyWindow(window);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyTexture(map_tex);
+    SDL_DestroyTexture(player_tex);
+    SDL_DestroyTexture(fov_tex);
 
     return 0;
 }
