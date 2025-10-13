@@ -63,16 +63,16 @@ const int world_map[MAP_WIDTH][MAP_HEIGHT] = {
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,3,0,3,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,1,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,1,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,4,4,4,4,3,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,4,0,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,1,2,2,3,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+  {1,1,2,2,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
 double myMin(double x, double y) {
@@ -253,12 +253,10 @@ bool pollAndHandleEvent() {
                 break;
             case SDLK_DOWN:
                 tmpVec = vec2(0,0).max(playerPos - player_speed*rayDir);
-                playerPos = tmpVec;
-                break;
+                goto update;
             case SDLK_UP:
                 tmpVec = vec2(SCREEN_WIDTH,SCREEN_HEIGHT).min(playerPos + player_speed*rayDir);
-                playerPos = tmpVec;
-                break;
+                goto update;
             case SDLK_LEFT:
                 player_angle = fmod(player_angle+0.01*player_speed, 2*M_PI);
                 break;
@@ -267,7 +265,7 @@ bool pollAndHandleEvent() {
                 break;
         }
     }
-
+update:
     if (tmpVec != playerPos) {
         if (world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
             goto done;
@@ -347,7 +345,6 @@ void dda(double cameraX, double *perpWallDist, int *rMapX, int *rMapY) {
     }
     *rMapX = mapX;
     *rMapY = mapY;
-    
 }
 
 void draw_fov() {
@@ -372,7 +369,11 @@ void draw_fov() {
         }
 
         // vertical line
-        for (int y = drawStart; y <= drawEnd; y++) {
+        int pad=0;
+        if (world_map[mapX][mapY] == 1) {
+            pad=20;
+        }
+        for (int y = drawStart-pad; y <= drawEnd; y++) {
             draw_pixel(vec2(x, y), fov_pixels, colorMap(world_map[mapX][mapY]));
         }
     }
@@ -418,7 +419,6 @@ int main(int argc, char **argv) {
         SDL_RenderPresent(renderer);
 
         SDL_Delay(16); // ~60FPS
-    
     }
 
     SDL_DestroyWindow(window);
