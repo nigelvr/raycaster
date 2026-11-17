@@ -1,52 +1,37 @@
+#include <sys/stat.h>
 #include <vector>
 #include <iostream>
 #include <tuple>
 #include <cmath>
+#include <algorithm>
+#include <charconv>
+#include <limits>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
 
-using namespace std;
+// using namespace std;
 
 // Colors
 #define RED 0xFF0000FF
 #define WHITE 0xFFFFFFFF
 #define GREY 0x00808080
-#define BLUE 0xFF0000FF
-#define CYAN 0xFF00FFFF
-#define GREEN 0x0000A36C
+#define CYAN  0xFF00FFFF
+#define GREEN 0xFF00FF00
+#define BLUE  0xFFFF0000
 
 // Game config
-#define SCREEN_WIDTH 640
+#define SCREEN_WIDTH 600
 #define SCREEN_HEIGHT 480
 #define MAP_WIDTH 24
 #define MAP_HEIGHT 24
-#define BOX_WIDTH 26
+#define BOX_WIDTH 25
 #define BOX_HEIGHT 20
 
-// Game globals
-SDL_Texture *map_tex;
-uint32_t *map_pixels;
-int pitch;
+constexpr double CAMERA_HEIGHT = 0.5;
+constexpr double HORIZON_Y = SCREEN_HEIGHT / 2.0 + 80.0;
 
-// More game globals
-double rotSpeed=0.04;
-double walkSpeed = 1;
-double player_angle=0;
-int player_speed=4;
-SDL_Texture *player_tex;
-uint32_t *player_pixels;
+const double infinity = std::numeric_limits<double>::infinity();
 
-// Even more
-SDL_Texture *fov_tex;
-uint32_t *fov_pixels;
-vector<pair<pair<int,int>, double>> fov;
-
-
-enum Mode {
-    MAP,
-    FOV
-};
-
-Mode mode = MAP;
 
 const int world_map[MAP_WIDTH][MAP_HEIGHT] = {
   {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
@@ -63,17 +48,19 @@ const int world_map[MAP_WIDTH][MAP_HEIGHT] = {
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,4,0,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,1,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,1,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,0,0,0,0,4,4,4,4,4,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+  {1,0,0,0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
   {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-  {1,1,2,2,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+  {1,1,3,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
 };
+
+// Even more
 
 double myMin(double x, double y) {
     return x >= y ? y : x;
@@ -134,49 +121,16 @@ bool operator!=(vec2 a, vec2 b) {
     return !(a==b);
 }
 
-vec2 playerPos(140,20);
-
-void draw_pixel(vec2 v, uint32_t *pixbuf, uint32_t color) {
+void draw_pixel(vec2 v, uint32_t *pixbuf, uint32_t color, int pitchBytes) {
     int x = floor(v.x);
     int y = floor(v.y);
-    pixbuf[y*(pitch/sizeof(uint32_t))+x] = color;
-}
-
-void draw_pixel_with_pitch(vec2 v, uint32_t *pixbuf, uint32_t color, int p) {
-    int x = floor(v.x);
-    int y = floor(v.y);
-    pixbuf[y*(p/sizeof(uint32_t))+x] = color;
-}
-
-void fill_rect(vec2 v, int width, int height, uint32_t color, uint32_t *target, int pad=1) {
-    for (int i = v.x+pad; i < v.x+width-1; i++) {
-        for (int j = v.y+pad; j < v.y+height-1; j++) {
-            draw_pixel(vec2(i,j), target, color);
-        }
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) {
+        return;
     }
+    pixbuf[y*(pitchBytes/sizeof(uint32_t))+x] = color;
 }
 
-int cell_value(vec2 v) {
-    int x = floor(v.x);
-    int y = floor(v.y);
-    return world_map[x/BOX_WIDTH][y/BOX_HEIGHT];
-}
-
-uint32_t colorMap(int k) {
-    switch (k) {
-        case 1:
-            return GREY; // ok
-        case 2:
-            return RED; // OK
-        case 3:
-            return BLUE;
-        case 4:
-            return CYAN;
-    }
-    return GREEN;
-}
-
-void draw_line(vec2 u, vec2 v, uint32_t *pixbuf, uint32_t color=RED, int p=pitch) {
+void draw_line(vec2 u, vec2 v, uint32_t *pixbuf, int pitchBytes, uint32_t color=RED) {
     int length_squared = (v.x-u.x)*(v.x-u.x) + (v.y-u.y)*(v.y-u.y);
     int dx = abs(v.x-u.x);
     int dy = abs(v.y-u.y);
@@ -193,7 +147,7 @@ void draw_line(vec2 u, vec2 v, uint32_t *pixbuf, uint32_t color=RED, int p=pitch
             break;
         }
         
-        draw_pixel_with_pitch(u, pixbuf, color, p);
+        draw_pixel(u, pixbuf, color, pitchBytes);
         
         if (err > -dx) {
             err -= dy;
@@ -206,226 +160,584 @@ void draw_line(vec2 u, vec2 v, uint32_t *pixbuf, uint32_t color=RED, int p=pitch
     }
 }
 
-void draw_2d_map() {
-    SDL_LockTexture(map_tex, NULL, (void **)&map_pixels, &pitch);
+class Player {
+public:
+    vec2 pos;
+    double angle;
+    Player(vec2 p, double a) : pos(p), angle(a) {}
 
-    for (int i = 0; i < MAP_WIDTH; i++) {
-        for (int y=0; y < SCREEN_HEIGHT; y++) {
-            draw_pixel(vec2(i*BOX_WIDTH, y), map_pixels, WHITE);
-        }
-        for (int j = 0; j < MAP_HEIGHT; j++) {
-            for (int x=0; x < SCREEN_WIDTH; x++) {
-                draw_pixel(vec2(x, j*BOX_HEIGHT), map_pixels, WHITE);
-            }
-            if (world_map[i][j]) {
-                fill_rect(vec2(i*BOX_WIDTH, j*BOX_HEIGHT), BOX_WIDTH, BOX_HEIGHT, colorMap(world_map[i][j]), map_pixels);
-            }
-        }
+    vec2 forwardDir() {
+        return vec2(sin(angle), cos(angle));
     }
-    
-    SDL_UnlockTexture(map_tex);
-}
 
-vec2 computeRayDir() {
-    return vec2(sin(player_angle), cos(player_angle));
-}
-
-// returns true if time to quit
-// otherwise, processes the event and returns false
-bool pollAndHandleEvent() {
-    SDL_Event event;
-    int x,y;
-    if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
-        return true;
+    void turnLeft() {
+        angle = fmod(angle+0.01*player_speed, 2*M_PI);
     }
-    vec2 rayDir = computeRayDir();
-    vec2 tmpVec(-1,-1);
-    if (event.type == SDL_KEYDOWN) {
-        switch (event.key.keysym.sym) {
-            case SDLK_ESCAPE:
-                return true;
-            case SDLK_SPACE:
-                if (mode == FOV) {
-                    mode = MAP;
-                } else {
-                    mode = FOV;
-                }
-                break;
-            case SDLK_DOWN:
-                tmpVec = vec2(0,0).max(playerPos - player_speed*rayDir);
-                goto update;
-            case SDLK_UP:
-                tmpVec = vec2(SCREEN_WIDTH,SCREEN_HEIGHT).min(playerPos + player_speed*rayDir);
-                goto update;
-            case SDLK_LEFT:
-                player_angle = fmod(player_angle+0.01*player_speed, 2*M_PI);
-                break;
-            case SDLK_RIGHT:
-                player_angle = fmod(player_angle-0.01*player_speed, 2*M_PI);
-                break;
+
+    void turnRight() {
+        angle = fmod(angle-0.01*player_speed, 2*M_PI);
+    }
+
+    void moveForward() {
+        vec2 rayDir = forwardDir();
+        vec2 tmpVec = vec2(SCREEN_WIDTH,SCREEN_HEIGHT).min(pos + player_speed*rayDir);
+        if (!world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
+            pos = tmpVec;
         }
     }
-update:
-    if (tmpVec != playerPos) {
-        if (world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
-            goto done;
-        } else {
-            playerPos = tmpVec;
+
+    void moveBackward() {
+        vec2 rayDir = forwardDir();
+        vec2 tmpVec = vec2(0,0).max(pos - player_speed*rayDir);
+        if (!world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
+            pos = tmpVec;
         }
     }
-done:
-    return false;
-}
 
-void draw_player() {
-    int player_pitch;
-    SDL_LockTexture(player_tex, NULL, (void **)&player_pixels, &player_pitch);
-    memset(player_pixels, 0, 40*40*sizeof(uint32_t));
-    for (int i = 20; i < 30; i++) {
-        for (int j = 20; j < 30; j++) {
-            draw_pixel_with_pitch(vec2(i,j), player_pixels, RED, player_pitch);
+    void strafeLeft() {
+        vec2 rayDir = forwardDir();
+        vec2 orth(-rayDir.y, rayDir.x);
+        vec2 tmpVec = vec2(0,0).max(pos - player_speed*orth);
+        if (!world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
+            pos = tmpVec;
         }
     }
-    vec2 rayDir = computeRayDir();
-    draw_line(vec2(20,20), (vec2(20,20) + 20*rayDir).round(), player_pixels, RED, player_pitch);
-    SDL_UnlockTexture(player_tex);
-}
 
-// Sends a ray from playerPos to cameraX*planeDir and returns the distance
-// from the hit wall
-void dda(double cameraX, double *perpWallDist, int *rMapX, int *rMapY) {
-    double sideDistX, sideDistY;
-    double px = playerPos.x/(double)BOX_WIDTH;
-    double py = playerPos.y/(double)BOX_HEIGHT;
-    vec2 rayDir = vec2(sin(player_angle), cos(player_angle)) + cameraX*vec2(-cos(player_angle), sin(player_angle));
+    void strafeRight() {
+        vec2 rayDir = forwardDir();
+        vec2 orth(rayDir.y, -rayDir.x);
+        vec2 tmpVec = vec2(0,0).max(pos - player_speed*orth);
+        if (!world_map[(int)tmpVec.x/BOX_WIDTH][(int)tmpVec.y/BOX_HEIGHT]) {
+            pos = tmpVec;
+        }
+    }
+private:
+    double rotSpeed=0.04;
+    double walkSpeed = 1;
+    int player_speed=4;
+};
+
+bool newdda(double cameraX, Player &player, double *perpWallDist, int *rMapX, int *rMapY, double *wallx, double *wally, int *side) {  
+      
+    double px = player.pos.x/(double)BOX_WIDTH;
+    double py = player.pos.y/(double)BOX_HEIGHT;
+    vec2 rayDir = vec2(sin(player.angle), cos(player.angle)) + cameraX*vec2(-cos(player.angle), sin(player.angle));
     int mapX = int(px);
     int mapY = int(py);
-    double deltaDistX = (rayDir.x == 0) ? 1e30 : abs(1/rayDir.x);
-    double deltaDistY = (rayDir.y == 0) ? 1e30 : abs(1/rayDir.y);
-    int hit, stepX, stepY, side;
+    if (mapX < 0 || mapX >= MAP_WIDTH || mapY < 0 || mapY >= MAP_HEIGHT) {
+        return false;
+    }
+    double rayT = 0;
 
-    hit = 0;
-    if (rayDir.x < 0) {
-        stepX = -1;
-        sideDistX = (px - mapX)*deltaDistX;
-    } else {
+    // Our ray is represented by R(t) = (px,py) + t(rayDir.x, rayDir.y)
+
+    // Initialize the ray's starting position in the map grid
+    int stepX = 0, stepY = 0;
+    double tdX = infinity, tdY = infinity; // time-distances to the nearest x and y grid lines
+    if (rayDir.x > 0) {
         stepX = 1;
-        sideDistX = (mapX + 1 - px) * deltaDistX;
+        tdX = (mapX + 1 - px)/rayDir.x;
+    } else if (rayDir.x < 0) {
+        stepX = -1;
+        tdX = (px - mapX)/-rayDir.x;
     }
-
-    if (rayDir.y < 0) {
-        stepY = -1;
-        sideDistY = (py - mapY) * deltaDistY;
-    } else {
+    if (rayDir.y > 0) {
         stepY = 1;
-        sideDistY = (mapY + 1 - py) * deltaDistY;
+        tdY = (mapY + 1 - py)/rayDir.y;
+    } else if (rayDir.y < 0) {
+        stepY = -1;
+        tdY = (py - mapY)/-rayDir.y;
     }
 
-    while (!hit) {
-        if (sideDistX < sideDistY) {
-            sideDistX += deltaDistX;
-            mapX += stepX;
-            side = 0;
-        } else {
-            sideDistY += deltaDistY;
-            mapY += stepY;
-            side = 1;
+    while (1) {
+        if (isinf(tdX) && isinf(tdY)) {
+            return false;
         }
-
+        if (tdX < tdY) {
+            *side = 0;
+            auto t = tdX;
+            rayT += t;
+            px = mapX + (stepX > 0 ? 1 : 0);
+            py += t*rayDir.y;
+            mapX += stepX;
+        } else {
+            *side = 1;
+            auto t = tdY;
+            rayT += t;
+            px += t*rayDir.x;
+            py = mapY + (stepY > 0 ? 1 : 0);
+            mapY += stepY;
+        }
+        if (mapX < 0 || mapX >= MAP_WIDTH || mapY < 0 || mapY >= MAP_HEIGHT) {
+            return {};
+        }
+        if (rayDir.x > 0) {
+            tdX = (mapX + 1 - px)/rayDir.x;
+        } else if (rayDir.x < 0) {
+            tdX = (px - mapX)/-rayDir.x;
+        } else {
+            tdX = infinity;
+        }
+        if (rayDir.y > 0) {
+            tdY = (mapY + 1 - py)/rayDir.y;
+        } else if (rayDir.y < 0) {
+            tdY = (py - mapY)/-rayDir.y;
+        } else {
+            tdY = infinity;
+        }
         if (world_map[mapX][mapY]) {
-            hit=1;
             break;
         }
     }
 
-    if (!side) {
-        *perpWallDist = sideDistX - deltaDistX; 
-    } else {
-        *perpWallDist = sideDistY - deltaDistY;
-    }
     *rMapX = mapX;
     *rMapY = mapY;
+    *perpWallDist = rayT;
+    *wallx = px;
+    *wally = py;
+    return true;
 }
 
-void draw_fov() {
-    SDL_LockTexture(fov_tex, NULL, (void **)&fov_pixels, &pitch);
-    memset(fov_pixels, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(uint32_t));
-    int mapX, mapY;
-    double cameraX, perpWallDist;
-    for (int x = 0; x < SCREEN_WIDTH; x++) {
-        cameraX = 2*(x/(double)SCREEN_WIDTH) - 1;
 
-        dda(cameraX, &perpWallDist, &mapX, &mapY);
 
-        int lineHeight = (int)(SCREEN_HEIGHT/perpWallDist);
-        // calculate lowest and highest pixel to fill in current stripe
-        int drawStart = -lineHeight / 2 + SCREEN_HEIGHT / 2 + 80;
-        if (drawStart < 0) {
-            drawStart = 0;
-        }
-        int drawEnd = lineHeight / 2 + SCREEN_HEIGHT / 2 + 80;
-        if (drawEnd >= SCREEN_HEIGHT) {
-            drawEnd = SCREEN_HEIGHT - 1;
-        }
+enum Mode {
+    MAP,
+    FOV
+};
 
-        // vertical line
-        int pad=0;
-        if (world_map[mapX][mapY] == 1) {
-            pad=20;
-        }
-        for (int y = drawStart-pad; y <= drawEnd; y++) {
-            draw_pixel(vec2(x, y), fov_pixels, colorMap(world_map[mapX][mapY]));
-        }
+class Renderer {
+public:
+    SDL_Renderer *renderer;
+    SDL_Texture *fov_tex;
+    uint32_t *fov_pixels;
+    SDL_Surface *sky_surface;
+    SDL_Surface *wall_surface;
+    SDL_Surface *floor_surface;
+
+
+    Renderer(SDL_Window *window) {
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        map_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
+        player_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 40, 40);
+        SDL_SetTextureBlendMode(map_tex, SDL_BLENDMODE_NONE);
+        SDL_SetTextureBlendMode(player_tex, SDL_BLENDMODE_BLEND);
+        fov_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
+        wall_surface = loadSurface("bricks.png");
+        floor_surface = loadSurface("stone.png");
+        sky_surface = loadSurface("sky.png");
     }
-    SDL_UnlockTexture(fov_tex);
-}
 
-int main(int argc, char **argv) {
-    SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window *window = SDL_CreateWindow("sdl app", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    map_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
-    player_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, 40, 40);
-    fov_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
-    SDL_SetTextureBlendMode(map_tex, SDL_BLENDMODE_NONE);
-    SDL_SetTextureBlendMode(player_tex, SDL_BLENDMODE_BLEND);
+    ~Renderer() {
+        SDL_DestroyTexture(map_tex);
+        SDL_DestroyTexture(player_tex);
+        SDL_DestroyTexture(fov_tex);
+        SDL_FreeSurface(wall_surface);
+        SDL_FreeSurface(floor_surface);
+        SDL_FreeSurface(sky_surface);
+        SDL_DestroyRenderer(renderer);
+    }
 
-    draw_2d_map();
-
-    SDL_Event event;
-    bool quit = false;
-    SDL_Rect r;
-    r.w = 40;
-    r.h = 40;
-    while (1) {
-       quit = pollAndHandleEvent();
-        if (quit) {
-            break;
-        }
-
-        draw_player();
-        draw_fov();
-
+    void renderMap(Player &player, Mode mode) {
         SDL_RenderClear(renderer);
-
+        SDL_Rect r;
+        r.w = 40;
+        r.h = 40;
         if (mode == MAP) {
             SDL_RenderCopy(renderer, map_tex, NULL, NULL);
-            r.x = floor(playerPos.x);
-            r.y = floor(playerPos.y);
+            r.x = floor(player.pos.x);
+            r.y = floor(player.pos.y);
             SDL_RenderCopy(renderer, player_tex, NULL, &r);
         } else {
             SDL_RenderCopy(renderer, fov_tex, NULL, NULL);
         }
-        SDL_RenderPresent(renderer);
-
-        SDL_Delay(16); // ~60FPS
     }
 
-    SDL_DestroyWindow(window);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyTexture(map_tex);
-    SDL_DestroyTexture(player_tex);
-    SDL_DestroyTexture(fov_tex);
+    // only needs to be called once - the map background
+    void draw_2d_map() {
+        int mapPitch;
+        SDL_LockTexture(map_tex, NULL, (void **)&map_pixels, &mapPitch);
 
-    return 0;
+        for (int i = 0; i < MAP_WIDTH; i++) {
+            for (int y=0; y < SCREEN_HEIGHT; y++) {
+                draw_pixel(vec2(i*BOX_WIDTH, y), map_pixels, WHITE, mapPitch);
+            }
+            for (int j = 0; j < MAP_HEIGHT; j++) {
+                for (int x=0; x < SCREEN_WIDTH; x++) {
+                    draw_pixel(vec2(x, j*BOX_HEIGHT), map_pixels, WHITE, mapPitch);
+                }
+                if (world_map[i][j]) {
+                    int pad = 1;
+                    auto v = vec2(i*BOX_WIDTH, j*BOX_HEIGHT);
+                    for (int i = v.x+pad; i < v.x+BOX_WIDTH-1; i++) {
+                        for (int j = v.y+pad; j < v.y+BOX_HEIGHT-1; j++) {
+                            draw_pixel(vec2(i,j), map_pixels, GREY, mapPitch);
+                        }
+                    }
+                }
+            }
+        }
+        
+        SDL_UnlockTexture(map_tex);
+    }
+
+    void draw_fov(Player &player) {
+        int pitch;
+        SDL_LockTexture(fov_tex, NULL, (void **)&fov_pixels, &pitch);
+        memset(fov_pixels, 0, SCREEN_WIDTH*SCREEN_HEIGHT*sizeof(uint32_t));
+
+        bool wallSurfaceLocked = SDL_MUSTLOCK(wall_surface);
+        if (wallSurfaceLocked && SDL_LockSurface(wall_surface) != 0) {
+            std::cerr << "Could not lock wall: " << SDL_GetError() << std::endl;
+            SDL_UnlockTexture(fov_tex);
+            return;
+        }
+        bool skySurfaceLocked = SDL_MUSTLOCK(sky_surface);
+        if (skySurfaceLocked && SDL_LockSurface(sky_surface) != 0) {
+            std::cerr << "Could not lock sky.png: " << SDL_GetError() << std::endl;
+            if (wallSurfaceLocked) {
+                SDL_UnlockSurface(wall_surface);
+            }
+            SDL_UnlockTexture(fov_tex);
+            return;
+        }
+
+        bool floorSurfaceLocked = SDL_MUSTLOCK(floor_surface);
+        if (floorSurfaceLocked && SDL_LockSurface(floor_surface) != 0) {
+            std::cerr << "Could not lock stone.png: " << SDL_GetError() << std::endl;
+            if (wallSurfaceLocked) {
+                SDL_UnlockSurface(wall_surface);
+            }
+            if (skySurfaceLocked) {
+                SDL_UnlockSurface(sky_surface);
+            }
+            SDL_UnlockTexture(fov_tex);
+            return;
+        }
+
+        int mapX, mapY;
+        double cameraX, perpWallDist;
+        const int horizon = SCREEN_HEIGHT / 2 + 80;
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            cameraX = 2*(x/(double)SCREEN_WIDTH) - 1;
+
+            double wallx, wally;
+            int side;
+            bool hit = newdda(cameraX, player, &perpWallDist, &mapX, &mapY, &wallx, &wally, &side);
+            int wallStart = horizon;
+            int drawEnd = horizon;
+            
+            // Draw the sky
+            // We choose not to draw the sky for now
+            /*
+            double skyU = (player.angle - atan(cameraX)) / (2 * M_PI);
+            skyU -= floor(skyU);
+            int skyTexX = std::min((int)(skyU * sky_surface->w), sky_surface->w - 1);
+            for (int y = 0; y < wallStart; y++) {
+                int skyTexY = y * sky_surface->h / horizon;
+                auto *row = reinterpret_cast<Uint32 *>(
+                    static_cast<Uint8 *>(sky_surface->pixels)
+                    + skyTexY * sky_surface->pitch
+                );
+                Uint8 r, g, b, a;
+                SDL_GetRGBA(row[skyTexX], sky_surface->format, &r, &g, &b, &a);
+                uint32_t pixelColor = SDL_MapRGBA(sky_surface->format, r, g, b, a);
+                draw_pixel(vec2(x, y), fov_pixels, pixelColor, pitch);
+            } */
+            
+            if (hit) {
+                const double maxLineHeight = 2.0 * SCREEN_HEIGHT;
+                const double projectedHeight = perpWallDist > 0
+                    ? SCREEN_HEIGHT / perpWallDist
+                    : maxLineHeight;
+                int lineHeight = (int)std::min(projectedHeight, maxLineHeight);
+                wallStart = std::max(0, -lineHeight / 2 + horizon);
+                drawEnd = std::min(SCREEN_HEIGHT - 1, lineHeight / 2 + horizon);
+            }
+
+            // draw the wall
+            for (int y = wallStart; y <= drawEnd; y++) {
+                double wallV = (double)(y - wallStart) / (drawEnd - wallStart);
+                double wallU = side == 0
+                ? wally - floor(wally)
+                : wallx - floor(wallx);
+                int wallTexX = std::clamp(
+                    (int)(wallU * wall_surface->w),
+                    0,
+                    wall_surface->w - 1
+                );
+                int wallTexY = std::clamp(
+                    (int)(wallV * wall_surface->h),
+                    0,
+                    wall_surface->h - 1
+                );
+                auto *row = reinterpret_cast<Uint32 *>(
+                    static_cast<Uint8 *>(wall_surface->pixels)
+                    + wallTexY * wall_surface->pitch
+                );
+                Uint8 r, g, b, a;
+                SDL_GetRGBA(row[wallTexX], wall_surface->format, &r, &g, &b, &a);
+                uint32_t pixelColor = SDL_MapRGBA(wall_surface->format, r, g, b, a);
+                draw_pixel(vec2(x, y), fov_pixels, pixelColor, pitch);
+            }
+
+            // draw the floor
+            vec2 forward = vec2(sin(player.angle), cos(player.angle));
+            const vec2 cameraPlane(-forward.y, forward.x);
+            for (int y = drawEnd + 1; y < SCREEN_HEIGHT; y++) {
+                // distance from the wall to the floor
+                double distance = (SCREEN_HEIGHT * 0.5) / (y - horizon);
+                const vec2 rayDir = forward + cameraX * cameraPlane;
+                double floorX = player.pos.x + distance * rayDir.x;
+                double floorY = player.pos.y + distance * rayDir.y;
+
+                int floorTexX = (int)(floorX * floor_surface->w) % floor_surface->w;
+                int floorTexY = (int)(floorY * floor_surface->h) % floor_surface->h;
+
+                auto *row = reinterpret_cast<Uint32 *>(
+                    static_cast<Uint8 *>(floor_surface->pixels)
+                    + floorTexY * floor_surface->pitch
+                );
+                Uint8 r, g, b, a;
+                SDL_GetRGBA(row[floorTexX], floor_surface->format, &r, &g, &b, &a);
+                uint32_t pixelColor = SDL_MapRGBA(floor_surface->format, r, g, b, a);
+                draw_pixel(vec2(x, y), fov_pixels, pixelColor, pitch);
+            }
+        }
+        if (skySurfaceLocked) {
+            SDL_UnlockSurface(sky_surface);
+        }
+        if (wallSurfaceLocked) {
+            SDL_UnlockSurface(wall_surface);
+        }
+        if (floorSurfaceLocked) {
+            SDL_UnlockSurface(floor_surface);
+        }
+        SDL_UnlockTexture(fov_tex);
+    }
+
+    void drawPixels(Player &player) {
+        draw_player(player);
+    }
+
+
+private:
+    SDL_Texture *player_tex;
+    uint32_t *player_pixels=NULL;
+    SDL_Texture *map_tex;
+    uint32_t *map_pixels;
+
+    SDL_Surface *loadSurface(std::string filename) {
+        SDL_Surface *convertedSurface;
+        SDL_Surface *tmpSurface = IMG_Load(filename.c_str());  // SDL_LoadBMP("brick.bmp");
+        if (tmpSurface == nullptr) {
+            std::cerr << "Could not load " << filename << ": " << SDL_GetError() << std::endl;
+            SDL_Quit();
+            return nullptr;
+        }
+        convertedSurface = SDL_ConvertSurfaceFormat(tmpSurface, SDL_PIXELFORMAT_RGBA32, 0);
+        SDL_FreeSurface(tmpSurface);
+        if (convertedSurface == nullptr) {
+            std::cerr << "Could not convert " << filename << ": " << SDL_GetError() << std::endl;
+            SDL_Quit();
+            return nullptr;
+        }
+        return convertedSurface;
+    }
+
+    void draw_player(Player &player) {
+        int player_pitch;
+        SDL_LockTexture(player_tex, NULL, (void **)&player_pixels, &player_pitch);
+        memset(player_pixels, 0, 40*40*sizeof(uint32_t));
+        for (int i = 20; i < 30; i++) {
+            for (int j = 20; j < 30; j++) {
+                draw_pixel(vec2(i,j), player_pixels, RED, player_pitch);
+            }
+        }
+        draw_line(vec2(20,20), (vec2(20,20) + 20*player.forwardDir()).round(), player_pixels, player_pitch, RED);
+        SDL_UnlockTexture(player_tex);
+    }
+
+
+};
+
+
+
+class Game {
+public:
+    int ok=1;
+    SDL_Window *window;
+    Renderer *renderer;
+
+    Game() {
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            std::cerr << "SDL_Init failed: " << SDL_GetError() << std::endl;
+            ok = 0;
+        }
+        window = SDL_CreateWindow("sdl app", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
+        renderer = new Renderer(window);
+    }
+
+    int mainloop(bool screenshot, int capture_width, int capture_height) {
+        bool quit = false;
+        renderer->draw_2d_map();
+        long frameCount = 0;
+        while (1) {
+        quit = pollAndHandleEvent();
+            if (quit) {
+                break;
+            }
+
+            renderer->drawPixels(player);
+            renderer->draw_fov(player);
+            
+            renderer->renderMap(player, mode);
+
+            if (screenshot) {
+                int w, h;
+                if (SDL_GetRendererOutputSize(renderer->renderer, &w, &h) != 0) {
+                    std::cerr << "Could not get renderer size: " << SDL_GetError() << std::endl;
+                    return 1;
+                }
+                SDL_Surface* screenshot_surface = SDL_CreateRGBSurfaceWithFormat(
+                    0, w, h, 32, SDL_PIXELFORMAT_ARGB8888
+                );
+                if (!screenshot_surface) {
+                    std::cerr << "Could not create screenshot surface: " << SDL_GetError() << std::endl;
+                    return 1;
+                }
+                SDL_Surface* scaled_surface = SDL_CreateRGBSurfaceWithFormat(
+                    0, capture_width, capture_height, 32, SDL_PIXELFORMAT_ARGB8888
+                );
+                if (!scaled_surface) {
+                    std::cerr << "Could not create scaled screenshot: " << SDL_GetError() << std::endl;
+                    SDL_FreeSurface(screenshot_surface);
+                    return 1;
+                }
+                if (SDL_RenderReadPixels(renderer->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, screenshot_surface->pixels, screenshot_surface->pitch) != 0 ||
+                    SDL_SetSurfaceBlendMode(screenshot_surface, SDL_BLENDMODE_NONE) != 0 ||
+                    SDL_BlitScaled(screenshot_surface, NULL, scaled_surface, NULL) != 0 ||
+                    SDL_SaveBMP(scaled_surface, ("cap/screenshot" + std::to_string(frameCount) + ".bmp").c_str()) != 0) {
+                    std::cerr << "Could not save screenshot: " << SDL_GetError() << std::endl;
+                    SDL_FreeSurface(scaled_surface);
+                    SDL_FreeSurface(screenshot_surface);
+                    return 1;
+                }
+                SDL_FreeSurface(scaled_surface);
+                SDL_FreeSurface(screenshot_surface);
+            }
+
+            SDL_RenderPresent(renderer->renderer);
+
+            frameCount++;
+            SDL_Delay(16); // ~60FPS
+        }
+        return 0;
+    }
+
+    ~Game() {
+        SDL_DestroyWindow(window);
+        delete renderer;
+        SDL_Quit();
+        
+    }
+private:
+    Player player{vec2(140, 20), 0};
+    Mode mode = MAP;
+
+    // returns true if time to quit
+    // otherwise, processes the event and returns false
+    bool pollAndHandleEvent() {
+        SDL_Event event;
+        int x,y;
+        if (SDL_PollEvent(&event) && event.type == SDL_QUIT) {
+            return true;
+        }
+        vec2 tmpVec(-1,-1);
+
+        int numKeys, keyCount=0;
+        const Uint8 *keyState = SDL_GetKeyboardState(&numKeys);
+        for (int i = 0; i < numKeys; i++) {
+            if (keyState[i]) {
+                keyCount++;
+            }
+        }
+
+        if (event.type == SDL_KEYDOWN) {
+            if (keyCount == 1) {
+                switch (event.key.keysym.sym) {
+                    case SDLK_ESCAPE:
+                        return true;
+                    case SDLK_SPACE:
+                        if (mode == FOV) {
+                            mode = MAP;
+                        } else {
+                            mode = FOV;
+                        }
+                        break;
+                    case SDLK_DOWN:
+                        player.moveBackward();
+                        break;
+                    case SDLK_UP:
+                        player.moveForward();
+                        break;
+                    case SDLK_LEFT:
+                        player.turnLeft();
+                        break;
+                    case SDLK_RIGHT:
+                        player.turnRight();
+                        break;
+                }
+            } else if (keyCount == 2) {
+                vec2 forward = player.forwardDir();
+                vec2 orth(-forward.y, forward.x);
+                if (keyState[SDL_SCANCODE_LALT]) {
+                    if (keyState[SDL_SCANCODE_LEFT]) {
+                        player.strafeLeft();
+                    } else if (keyState[SDL_SCANCODE_RIGHT]) {
+                        player.strafeRight();
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+};
+
+
+
+int main(int argc, char **argv) {
+    bool screenshot = false;
+    int capture_width = 256, capture_height = 256;
+    if (argc >= 2 && !strcmp(argv[1], "screenshot")) {
+        screenshot = true;
+        if (argc != 2 && argc != 4) {
+            std::cerr << "Usage: " << argv[0] << " screenshot [width height]" << std::endl;
+            return 1;
+        }
+        if (argc == 4) {
+            auto width = std::from_chars(argv[2], argv[2] + strlen(argv[2]), capture_width);
+            auto height = std::from_chars(argv[3], argv[3] + strlen(argv[3]), capture_height);
+            if (width.ec != std::errc() || *width.ptr != '\0' || capture_width <= 0 ||
+                height.ec != std::errc() || *height.ptr != '\0' || capture_height <= 0) {
+                std::cerr << "Screenshot width and height must be positive integers" << std::endl;
+                return 1;
+            }
+        }
+        // if directory "cap" doesn't exist, create it
+        struct stat st = {0};
+        if (stat("cap", &st) == -1) {
+            if (mkdir("cap", 0700) != 0) {
+                std::cerr << "Could not create cap directory" << std::endl;
+                return 1;
+            }
+        }
+    }
+   
+   Game game;
+   if (!game.ok) {
+        return 1;
+   }
+
+    return game.mainloop(screenshot, capture_width, capture_height);
 }
