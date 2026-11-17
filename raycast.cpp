@@ -580,7 +580,7 @@ public:
     int mainloop(bool screenshot, int capture_width, int capture_height) {
         bool quit = false;
         renderer->draw_2d_map();
-        long frameCount = 0;
+        long captureCount = 0;
         while (1) {
         quit = pollAndHandleEvent();
             if (quit) {
@@ -592,14 +592,14 @@ public:
             
             renderer->renderMap(player, mode);
 
-            if (screenshot) {
+            if (screenshot && mode == FOV) {
                 int w, h;
                 if (SDL_GetRendererOutputSize(renderer->renderer, &w, &h) != 0) {
                     std::cerr << "Could not get renderer size: " << SDL_GetError() << std::endl;
                     return 1;
                 }
                 SDL_Surface* screenshot_surface = SDL_CreateRGBSurfaceWithFormat(
-                    0, w, h, 32, SDL_PIXELFORMAT_ARGB8888
+                    0, 2 * w, h, 32, SDL_PIXELFORMAT_ARGB8888
                 );
                 if (!screenshot_surface) {
                     std::cerr << "Could not create screenshot surface: " << SDL_GetError() << std::endl;
@@ -613,10 +613,19 @@ public:
                     SDL_FreeSurface(screenshot_surface);
                     return 1;
                 }
-                if (SDL_RenderReadPixels(renderer->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, screenshot_surface->pixels, screenshot_surface->pitch) != 0 ||
+                renderer->renderMap(player, MAP);
+                if (SDL_RenderReadPixels(renderer->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, screenshot_surface->pixels, screenshot_surface->pitch) != 0) {
+                    std::cerr << "Could not capture map: " << SDL_GetError() << std::endl;
+                    SDL_FreeSurface(scaled_surface);
+                    SDL_FreeSurface(screenshot_surface);
+                    return 1;
+                }
+                renderer->renderMap(player, FOV);
+                auto *fov_pixels = static_cast<Uint8 *>(screenshot_surface->pixels) + w * sizeof(Uint32);
+                if (SDL_RenderReadPixels(renderer->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, fov_pixels, screenshot_surface->pitch) != 0 ||
                     SDL_SetSurfaceBlendMode(screenshot_surface, SDL_BLENDMODE_NONE) != 0 ||
                     SDL_BlitScaled(screenshot_surface, NULL, scaled_surface, NULL) != 0 ||
-                    SDL_SaveBMP(scaled_surface, ("cap/screenshot" + std::to_string(frameCount) + ".bmp").c_str()) != 0) {
+                    SDL_SaveBMP(scaled_surface, ("cap/screenshot" + std::to_string(captureCount) + ".bmp").c_str()) != 0) {
                     std::cerr << "Could not save screenshot: " << SDL_GetError() << std::endl;
                     SDL_FreeSurface(scaled_surface);
                     SDL_FreeSurface(screenshot_surface);
@@ -624,12 +633,12 @@ public:
                 }
                 SDL_FreeSurface(scaled_surface);
                 SDL_FreeSurface(screenshot_surface);
+                captureCount++;
             }
 
             SDL_RenderPresent(renderer->renderer);
 
-            frameCount++;
-            SDL_Delay(16); // ~60FPS
+            //SDL_Delay(16); // ~60FPS
         }
         return 0;
     }
@@ -708,7 +717,7 @@ private:
 
 int main(int argc, char **argv) {
     bool screenshot = false;
-    int capture_width = 256, capture_height = 256;
+    int capture_width = 512, capture_height = 256;
     if (argc >= 2 && !strcmp(argv[1], "screenshot")) {
         screenshot = true;
         if (argc != 2 && argc != 4) {
