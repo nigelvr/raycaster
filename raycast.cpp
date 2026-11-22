@@ -322,8 +322,8 @@ public:
         SDL_SetTextureBlendMode(map_tex, SDL_BLENDMODE_NONE);
         SDL_SetTextureBlendMode(player_tex, SDL_BLENDMODE_BLEND);
         fov_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
-        wall_surface = loadSurface("bricks.png");
-        floor_surface = loadSurface("stone.png");
+        wall_surface = loadSurface("wall.bmp");
+        floor_surface = loadSurface("floor.bmp");
         sky_surface = loadSurface("sky.png");
     }
 
@@ -403,7 +403,7 @@ public:
 
         bool floorSurfaceLocked = SDL_MUSTLOCK(floor_surface);
         if (floorSurfaceLocked && SDL_LockSurface(floor_surface) != 0) {
-            std::cerr << "Could not lock stone.png: " << SDL_GetError() << std::endl;
+            std::cerr << "Could not lock floor.bmp: " << SDL_GetError() << std::endl;
             if (wallSurfaceLocked) {
                 SDL_UnlockSurface(wall_surface);
             }
@@ -528,7 +528,7 @@ private:
 
     SDL_Surface *loadSurface(std::string filename) {
         SDL_Surface *convertedSurface;
-        SDL_Surface *tmpSurface = IMG_Load(filename.c_str());  // SDL_LoadBMP("brick.bmp");
+        SDL_Surface *tmpSurface = IMG_Load(filename.c_str());
         if (tmpSurface == nullptr) {
             std::cerr << "Could not load " << filename << ": " << SDL_GetError() << std::endl;
             SDL_Quit();
