@@ -324,7 +324,7 @@ public:
         fov_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
         wall_surface = loadSurface("wall.bmp");
         floor_surface = loadSurface("floor.bmp");
-        sky_surface = loadSurface("sky.png");
+        sky_surface = loadSurface("sky.bmp");
     }
 
     ~Renderer() {
@@ -425,15 +425,18 @@ public:
             bool hit = newdda(cameraX, player, &perpWallDist, &mapX, &mapY, &wallx, &wally, &side);
             int wallStart = horizon;
             int drawEnd = horizon;
+            double projectedHeight = 1.0;
+            double projectedTop = horizon;
             
-            // Draw the sky
-            // We choose not to draw the sky for now
-            /*
-            double skyU = (player.angle - atan(cameraX)) / (2 * M_PI);
+            // Draw the sky - Cylinder method
+            double skyU = (player.angle - atan(cameraX)) * 8 / (2 * M_PI);
             skyU -= floor(skyU);
             int skyTexX = std::min((int)(skyU * sky_surface->w), sky_surface->w - 1);
             for (int y = 0; y < wallStart; y++) {
-                int skyTexY = y * sky_surface->h / horizon;
+                // int skyTexY = y * sky_surface->h / horizon;
+                    int skyTexY = ((y - horizon) % sky_surface->h + sky_surface->h)
+                  % sky_surface->h;
+                
                 auto *row = reinterpret_cast<Uint32 *>(
                     static_cast<Uint8 *>(sky_surface->pixels)
                     + skyTexY * sky_surface->pitch
@@ -442,21 +445,18 @@ public:
                 SDL_GetRGBA(row[skyTexX], sky_surface->format, &r, &g, &b, &a);
                 uint32_t pixelColor = SDL_MapRGBA(sky_surface->format, r, g, b, a);
                 draw_pixel(vec2(x, y), fov_pixels, pixelColor, pitch);
-            } */
+            }
             
             if (hit) {
-                const double maxLineHeight = 2.0 * SCREEN_HEIGHT;
-                const double projectedHeight = perpWallDist > 0
-                    ? SCREEN_HEIGHT / perpWallDist
-                    : maxLineHeight;
-                int lineHeight = (int)std::min(projectedHeight, maxLineHeight);
-                wallStart = std::max(0, -lineHeight / 2 + horizon);
-                drawEnd = std::min(SCREEN_HEIGHT - 1, lineHeight / 2 + horizon);
+                projectedHeight = SCREEN_HEIGHT / std::max(perpWallDist, 1e-9);
+                projectedTop = horizon - projectedHeight / 2.0;
+                wallStart = (int)std::max(0.0, projectedTop);
+                drawEnd = (int)std::min((double)(SCREEN_HEIGHT - 1), horizon + projectedHeight / 2.0);
             }
 
             // draw the wall
-            for (int y = wallStart; y <= drawEnd; y++) {
-                double wallV = (double)(y - wallStart) / (drawEnd - wallStart);
+            for (int y = wallStart; hit && y <= drawEnd; y++) {
+                double wallV = (y + 0.5 - projectedTop) / projectedHeight;
                 double wallU = side == 0
                 ? wally - floor(wally)
                 : wallx - floor(wallx);
